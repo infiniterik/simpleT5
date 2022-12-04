@@ -17,6 +17,8 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.progress import TQDMProgressBar
+import shutil
+
 
 torch.cuda.empty_cache()
 pl.seed_everything(42)
@@ -173,6 +175,7 @@ class LightningModel(pl.LightningModule):
         outputdir: str = "outputs",
         save_only_last_epoch: bool = False,
         lr=0.00001,
+        path_fn=None,
     ):
         """
         initiates a PyTorch Lightning Model
@@ -190,6 +193,7 @@ class LightningModel(pl.LightningModule):
         self.average_validation_loss = None
         self.save_only_last_epoch = save_only_last_epoch
         self.lr = lr
+        self.path_fn=path_fn
 
     def forward(self, input_ids, attention_mask, decoder_attention_mask, labels=None):
         """ forward step """
@@ -267,11 +271,19 @@ class LightningModel(pl.LightningModule):
             torch.mean(torch.stack([x["loss"] for x in training_step_outputs])).item(),
             4,
         )
-        path = f"{self.outputdir}/simplet5-epoch-{self.current_epoch}-train-loss-{str(self.average_training_loss)}-val-loss-{str(self.average_validation_loss)}"
+        if not self.path_fn:
+            path = f"{self.outputdir}/simplet5-epoch-{self.current_epoch}-train-loss-{str(self.average_training_loss)}-val-loss-{str(self.average_validation_loss)}"
+        else:
+            path = self.path_fn(self)
         if self.save_only_last_epoch:
             if self.current_epoch == self.trainer.max_epochs - 1:
                 self.tokenizer.save_pretrained(path)
                 self.model.save_pretrained(path)
+            else:
+                self.tokenizer.save_pretrained(f"{self.outputdir}/.simplet5-epoch-{self.current_epoch}.tmp")
+                self.model.save_pretrained(f"{self.outputdir}/.simplet5-epoch-{self.current_epoch}.tmp")
+            if self.current_epoch > 1:
+                shutil.rmtree(f"{self.outputdir}/.simplet5-epoch-{self.current_epoch-1}.tmp")
         else:
             self.tokenizer.save_pretrained(path)
             self.model.save_pretrained(path)
@@ -330,6 +342,7 @@ class SimpleT5:
         dataloader_num_workers: int = 2,
         save_only_last_epoch: bool = False,
         lr = 0.00001,
+        path_fn = None,
     ):
         """
         trains T5/MT5 model on custom dataset
@@ -346,7 +359,9 @@ class SimpleT5:
             precision (int, optional): sets precision training - Double precision (64), full precision (32) or half precision (16). Defaults to 32.
             logger (pytorch_lightning.loggers) : any logger supported by PyTorch Lightning. Defaults to "default". If "default", pytorch lightning default logger is used.
             dataloader_num_workers (int, optional): number of workers in train/test/val dataloader
-            save_only_last_epoch (bool, optional): If True, saves only the last epoch else models are saved at every epoch
+            save_only_last_epoch (bool, optional): If True, saves only the *latest* epoch else models are saved at every epoch
+            lr (float, optional): Sets the learning rate for the AdamW optimizer. Defaults to 0.00001
+            path_fn (LightningModel -> str, optional): Function to generate a name to save the model to
         """
         self.data_module = LightningDataModule(
             train_df,
@@ -363,7 +378,8 @@ class SimpleT5:
             model=self.model,
             outputdir=outputdir,
             save_only_last_epoch=save_only_last_epoch,
-            lr = lr
+            lr = lr,
+            path_fn = path_fn
         )
 
         # add callbacks
